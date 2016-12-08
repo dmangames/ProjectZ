@@ -36,6 +36,9 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
         
         NotificationCenter.default.addObserver(self, selector: #selector(ChatViewController.handleKeyboardDidShowNotification(_:)), name: NSNotification.Name.UIKeyboardDidShow, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(ChatViewController.handleKeyboardDidHideNotification(_:)), name: NSNotification.Name.UIKeyboardDidHide, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(ChatViewController.handleConnectedUserUpdateNotification(_:)), name: NSNotification.Name(rawValue: "userWasConnectedNotification"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(ChatViewController.handleDisconnectedUserUpdateNotification(_:)), name: NSNotification.Name(rawValue: "userWasDisconnectedNotification"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(ChatViewController.handleUserTypingNotification(_:)), name: NSNotification.Name(rawValue: "userTypingNotification"), object: nil)
         
         
         let swipeGestureRecognizer = UISwipeGestureRecognizer(target: self, action: #selector(ChatViewController.dismissKeyboard))
@@ -59,6 +62,13 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         
+        SocketIOManager.sharedInstance.getChatMessage { (messageInfo) -> Void in
+            DispatchQueue.main.async(execute: { () -> Void in
+                self.chatMessages.append(messageInfo)
+                self.tblChat.reloadData()
+                //                self.scrollToBottom()
+            })
+        }
     }
     
     
@@ -87,7 +97,11 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     // MARK: IBAction Methods
     
     @IBAction func sendMessage(_ sender: AnyObject) {
-
+        if tvMessageEditor.text.characters.count > 0 {
+            SocketIOManager.sharedInstance.sendMessage(message: tvMessageEditor.text!, withNickname: nickname)
+            tvMessageEditor.text = ""
+            tvMessageEditor.resignFirstResponder()
+        }
     }
 
     
@@ -172,6 +186,8 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     func dismissKeyboard() {
         if tvMessageEditor.isFirstResponder {
             tvMessageEditor.resignFirstResponder()
+            
+            SocketIOManager.sharedInstance.sendStopTypingMessage(nickname: nickname)
         }
     }
     
@@ -192,6 +208,23 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "idCellChat", for: indexPath) as! ChatCell
         
+        let currentChatMessage = chatMessages[indexPath.row]
+        let senderNickname = currentChatMessage["nickname"] as! String
+        let message = currentChatMessage["message"] as! String
+        let messageDate = currentChatMessage["date"] as! String
+        
+        if senderNickname == nickname {
+            cell.lblChatMessage.textAlignment = NSTextAlignment.right
+            cell.lblMessageDetails.textAlignment = NSTextAlignment.right
+            
+            cell.lblChatMessage.textColor = lblNewsBanner.backgroundColor
+        }
+        
+        cell.lblChatMessage.text = message
+        cell.lblMessageDetails.text = "by \(senderNickname.uppercased()) @ \(messageDate)"
+        
+        cell.lblChatMessage.textColor = UIColor.darkGray
+        
         return cell
     }
     
@@ -199,6 +232,7 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     // MARK: UITextViewDelegate Methods
     
     func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+        SocketIOManager.sharedInstance.sendStartTypingMessage(nickname: nickname)
         return true
     }
 
@@ -207,6 +241,43 @@ class ChatViewController: UIViewController, UITableViewDelegate, UITableViewData
     
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         return true
+    }
+    
+    func handleConnectedUserUpdateNotification(_ notification: NSNotification) {
+        let connectedUserInfo = notification.object as! [String: AnyObject]
+        let connectedUserNickname = connectedUserInfo["nickname"] as? String
+        lblNewsBanner.text = "User \(connectedUserNickname!.uppercased()) was just connected."
+        showBannerLabelAnimated()
+    }
+    
+    func handleDisconnectedUserUpdateNotification(_ notification: NSNotification) {
+        let disconnectedUserNickname = notification.object as! String
+        lblNewsBanner.text = "User \(disconnectedUserNickname.uppercased()) has left."
+        showBannerLabelAnimated()
+    }
+    
+    func handleUserTypingNotification(_ notification: NSNotification) {
+        if let typingUsersDictionary = notification.object as? [String: AnyObject] {
+            var names = ""
+            var totalTypingUsers = 0
+            for (typingUser, _) in typingUsersDictionary {
+                if typingUser != nickname {
+                    names = (names == "") ? typingUser : "\(names), \(typingUser)"
+                    totalTypingUsers += 1
+                }
+            }
+            
+            if totalTypingUsers > 0 {
+                let verb = (totalTypingUsers == 1) ? "is" : "are"
+                
+                lblOtherUserActivityStatus.text = "\(names) \(verb) now typing a message..."
+                lblOtherUserActivityStatus.isHidden = false
+            }
+            else {
+                lblOtherUserActivityStatus.isHidden = true
+            }
+        }
+        
     }
     
 }
